@@ -53,8 +53,8 @@ ApplicationWindow {
 
     MessageDialog {
         id: aboutBox
-        title: "About Text"
-        text: "This is a basic text editor \nwritten with Qt Quick Controls"
+        title: "About Goly"
+        text: "Goly IDE\nThe lovely IDE by Go, for Go."
         icon: StandardIcon.Information
     }
 
@@ -64,7 +64,7 @@ ApplicationWindow {
         shortcut: "ctrl+x"
         iconSource: "images/editcut.png"
         iconName: "edit-cut"
-        onTriggered: textArea.cut()
+        onTriggered: editor.textArea().cut()
     }
 
     Action {
@@ -73,7 +73,7 @@ ApplicationWindow {
         shortcut: "Ctrl+C"
         iconSource: "images/editcopy.png"
         iconName: "edit-copy"
-        onTriggered: textArea.copy()
+        onTriggered: textArea.textArea().copy()
     }
 
     Action {
@@ -82,7 +82,7 @@ ApplicationWindow {
         shortcut: "ctrl+v"
         iconSource: "qrc:images/editpaste.png"
         iconName: "edit-paste"
-        onTriggered: textArea.paste()
+        onTriggered: textArea.textArea().paste()
     }
 
     FileDialog {

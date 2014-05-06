@@ -21,11 +21,14 @@ func NewEditor(o qml.Object) *Editor {
 }
 
 func (e *Editor) Init() {
-	//tx := e.tx
-	//tx.On("textChanged", func() {
-	//	e.text = []rune(tx.Call("getText", 0, tx.Property("length")).(string))
-	//})
-
+	tx := e.tx
+	tx.On("rehighlight", func() {
+		text := tx.Call("getText", 0, tx.Property("length")).(string)
+		e.SetText(QmlHighlight(text))
+	})
+	tx.On("textChanged", func() {
+		e.text = []rune(tx.Call("getText", 0, tx.Property("length")).(string))
+	})
 	e.On("fileChanged", func() {
 		filePath := e.String("file")
 		if filePath[:7] == "file://" {
@@ -35,7 +38,7 @@ func (e *Editor) Init() {
 		if err != nil {
 			panic(err.Error())
 		}
-		e.SetText(string(QmlHighlight(fcb[:])))
+		e.SetText(QmlHighlight(string(fcb[:])))
 	})
 }
 

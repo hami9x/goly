@@ -16,6 +16,12 @@ Rectangle {
         property int tabWidth: 4
         readonly property string nbsp: String.fromCharCode(160)
         property string tabstr
+        readonly property variant braces: {"(": [Qt.Key_ParenLeft, ")"], "{": [Qt.Key_BraceLeft, "}"]}
+        property string braceOpening: ""
+        property string htmlTabstr
+        property int prevKey: 0
+        signal rehighlight()
+
         focus: true
 
         function inSelection() {
@@ -45,54 +51,189 @@ Rectangle {
             return cp;
         }
 
+        function moveOrMoveSel(direction, event) {
+            if (direction !== -1 && direction !== 1) {
+                return console.exception("WTF direction?");
+            }
+
+            var cp = cursorPosition+direction;
+            var tx = getText(0, length);
+            if (tx.charCodeAt(cp) === 160) {
+                if (direction === -1) {
+                    cp = getLineStart(cp, tx);
+                } else if (direction === 1) {
+                    cp = getPosAfterTabs(cp, tx);
+                }
+            }
+
+            if (event.modifiers & Qt.ShiftModifier) {
+                moveCursorSelection(cp, TextEdit.SelectCharacters)
+            } else {
+                cursorPosition = cp;
+            }
+        }
+
+        function isEnter(event) {
+            return (event.key === Qt.Key_Enter || event.key === Qt.Key_Return);
+        }
+
+        function isTextInput(event) {
+            return !(event.modifiers & Qt.ControlModifier) && !(event.modifiers & Qt.AltModifier) &&
+                    ((event.key >= Qt.Key_Space && event.key <= Qt.Key_ydiaeresis));
+        }
+
+        function isAlphaNumericKey(event) {
+            return (event.key >= Qt.Key_0 && event.key <= Qt.Key_9) || (event.key >= Qt.Key_A && event.key <= Qt.Key_Z);
+        }
+
+        function doRehighlight() {
+            var ocp = cursorPosition;
+            rehighlight();
+            cursorPosition = ocp;
+        }
+
+        function handleTab(event, back) {
+            var tx = getText(0, length);
+            var newline = String.fromCharCode(8232);
+            if (selectedText.indexOf(newline) != -1) { //if it's multiple-line selection than we perform indent
+                var selStart = selectionStart;
+                var selEnd = selectionEnd;
+                var start = getLineStart(selectionStart, tx);
+                var end = getPosAfterTabs(getLineStart(selectionEnd-1, tx), tx);
+                var lines = getText(start, end).split(newline);
+                var eoffset = 0;
+                var stoffset = tabWidth;
+                for (var ii in lines) {
+                    if (back) { //Shift tab
+                        var removeEnd = 0;
+                        while (removeEnd < lines[ii].length && lines[ii].charCodeAt(removeEnd) === 160 && removeEnd < tabWidth) {
+                            removeEnd++;
+                        }
+                        lines[ii] = lines[ii].substring(removeEnd, lines[ii].length);
+                        eoffset -= tabWidth;
+                        stoffset = -removeEnd;
+                    } else {
+                        lines[ii] = tabstr + lines[ii];
+                        eoffset += tabWidth;
+                    }
+                }
+
+                remove(start, end);
+                insert(start, lines.join("<br>"));
+                doRehighlight()
+                select(selStart + stoffset, selEnd + eoffset);
+            } else {
+                if (inSelection()) {
+                    remove(selectionStart, selectionEnd);
+                }
+                insert(cursorPosition, tabstr);
+                doRehighlight()
+            }
+
+            event.accepted = true;
+        }
+
         Component.onCompleted: {
             forceActiveFocus();
 
             for(var i=0; i<tabWidth; i++) {
                 tabstr+=nbsp;
+                htmlTabstr+="&nbsp;";
             }
         }
 
         Keys.onRightPressed: {
-            var cp = cursorPosition+1;
-            if (event.modifiers & Qt.ShiftModifier) {
-                moveCursorSelection(cp, TextEdit.SelectCharacters);
-            } else {
-                cursorPosition = cp;
-            }
+            moveOrMoveSel(1, event);
         }
 
         Keys.onLeftPressed: {
-            var cp = cursorPosition-1;
-            if (event.modifiers & Qt.ShiftModifier) {
-                moveCursorSelection(cp, TextEdit.SelectCharacters);
-            } else {
-                cursorPosition = cp;
-            }
-        }
-
-        Keys.onTabPressed: {
-            insert(cursorPosition, tabstr);
-            event.accepted = true;
+            moveOrMoveSel(-1, event);
         }
 
         Keys.onPressed: {
-            if (event.key === Qt.Key_Backspace && getText(0, length).charCodeAt(cursorPosition-1) === 160) {
-                remove(cursorPosition-4, cursorPosition);
-                event.accepted = true;
+            var tx = getText(0, length);
+            if (!inSelection()) {
+                if (event.key === Qt.Key_Backspace && tx.charCodeAt(cursorPosition-1) === 160) {
+                    remove(cursorPosition-tabWidth, cursorPosition);
+                    event.accepted = true;
+                    return;
+                }
+
+                if (event.key === Qt.Key_Delete) {
+                    if (tx.charCodeAt(cursorPosition) === 8232) {
+                        if (cursorPosition <= length-2) {
+                            remove(cursorPosition, getPosAfterTabs(getLineStart(cursorPosition+2, tx), tx));
+                        }
+                        event.accepted = true;
+                    } else {
+                        if (tx.charCodeAt(cursorPosition+1) === 160) {
+                            remove(cursorPosition, cursorPosition+tabWidth);
+                            event.accepted = true;
+                        }
+                    }
+                    return;
+                }
             }
 
-            if (event.key === Qt.Key_Enter || event.key === Qt.Key_Return) {
-                var tx = getText(0, length);
+            if (isEnter(event)) {
                 var prevLs = getLineStart(cursorPosition-1, tx);
-                var offset = getPosAfterTabs(prevLs, tx)-prevLs;
+                var st = getPosAfterTabs(prevLs, tx);
+                var offset = st-prevLs;
                 var sps = "";
                 for (var i=0; i<offset; ++i) {
                     sps += "&nbsp;";
                 }
-                insert(cursorPosition, "<br>");
-                insert(cursorPosition, sps);
+                if (cursorPosition < st) {
+                    insert(cursorPosition, sps+"<br>");
+                    cursorPosition--;
+                } else {
+                    if (braceOpening !== "") {
+                        //DANGER: inserting triggers cursorPosition change, if not careful this may mess up the braceOpening
+                        var closingBrace = braces[braceOpening][1];
+                        insert(cursorPosition, "<br>"+sps+htmlTabstr);
+                        var cp = cursorPosition;
+                        //insert closing brace
+                        insert(cursorPosition, "<br>"+sps);
+                        insert(cursorPosition, closingBrace);
+                        cursorPosition = cp;
+                        braceOpening = "";
+                    } else {
+                        insert(cursorPosition, "<br>"+sps);
+                    }
+                    doRehighlight()
+                }
                 event.accepted = true;
+                return;
+            }
+
+            if (event.key === Qt.Key_Tab) {
+                handleTab(event, false);
+                return;
+            }
+
+            if (event.key == Qt.Key_Backtab) {
+                handleTab(event, true);
+                return;
+            }
+
+            if (isTextInput(event)) {
+                if (braceOpening && cursorPosition >= 1 && tx[cursorPosition-1] !== braceOpening) {
+                    braceOpening = "";
+                }
+                //Opening brance handling
+                for (var br in braces) {
+                    if (event.key === braces[br][0]) {
+                        braceOpening = br;
+                    }
+                }
+
+                //When a word ends, rehighlighting is triggered
+                if (!isAlphaNumericKey(event) || !isAlphaNumericKey(prevKey)) {
+                    doRehighlight();
+                }
+
+                prevKey = event.key;
+                return;
             }
         }
 
@@ -101,6 +242,7 @@ Rectangle {
             //Deal with faked tabs created with &nbsp;'s on click and selection
             var cp = cursorPosition;
             var tx = getText(0, length);
+
             if (tx.charCodeAt(cp) === 160) {
                 var linestart = getLineStart(cp, tx);
                 if (linestart !== -1) {

@@ -122,9 +122,17 @@ func qmlize(str string) string {
 }
 
 // Highlight returns the QML HTML representation for the source
-func QmlHighlight(src []byte) []byte {
+func QmlHighlight(osrc string) string {
 	var b bytes.Buffer
-	tc := tokens(src)
+	src := ""
+	for _, ch := range osrc {
+		if ch == 8232 {
+			src += "\n"
+		} else {
+			src += string(ch)
+		}
+	}
+	tc := tokens([]byte(src))
 	prev := <-tc
 	for cur := <-tc; cur != nil; prev, cur = cur, <-tc {
 		wsl, code, wsr := trim(string(src)[prev.pos:cur.pos])
@@ -132,5 +140,5 @@ func QmlHighlight(src []byte) []byte {
 		b.WriteString(fmt.Sprintf(`<font color="%v">%v</font>`, getColor(prev.tok), code))
 		b.WriteString(qmlize(wsr))
 	}
-	return b.Bytes()
+	return string(b.Bytes())
 }
