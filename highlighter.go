@@ -108,15 +108,21 @@ func getColor(tok token.Token) string {
 
 func qmlize(str string) string {
 	ostr := ""
+	var prevCh rune = 0
 	for _, c := range str {
 		o := string(c)
 		switch c {
-		case '\n':
+		case '\n', 8232:
 			o = "<br>"
 		case '\t':
 			o = "&nbsp;&nbsp;&nbsp;&nbsp;"
+		case ' ':
+			if prevCh == c {
+				o = "&nbsp;"
+			}
 		}
 		ostr += o
+		prevCh = c
 	}
 	return ostr
 }
@@ -126,9 +132,10 @@ func QmlHighlight(osrc string) string {
 	var b bytes.Buffer
 	src := ""
 	for _, ch := range osrc {
-		if ch == 8232 {
+		switch ch {
+		case 8232:
 			src += "\n"
-		} else {
+		default:
 			src += string(ch)
 		}
 	}

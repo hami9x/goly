@@ -20,7 +20,15 @@ Rectangle {
         property string braceOpening: ""
         property string htmlTabstr
         property int prevKey: 0
-        signal rehighlight()
+        property string prevText
+        property bool undoHandled: false
+        property bool needRehighlight: false
+        property bool cpSetDontAdjust: false
+        signal performUndo()
+        signal performRedo()
+        signal rehighlight ()
+//        signal textGain (string str)
+//        signal textLoss (string str)
 
         focus: true
 
@@ -51,6 +59,29 @@ Rectangle {
             return cp;
         }
 
+        function getSpaceEnd(tx, pos, delta) {
+            var epos = pos;
+            while (1) {
+                if (epos < 0 || epos >= tx.length) {
+                    epos = epos-delta;
+                    break;
+                }
+
+                var cc = tx.charCodeAt(epos);
+                if (cc !== 32 && cc !== 160) {
+                    break;
+                }
+                epos += delta;
+            }
+            var opos = pos-delta;
+            var dist = delta < 0 ? pos-epos : epos-opos;
+            if (Math.abs(dist) % tabWidth === 0) {
+                return opos+delta*tabWidth;
+            }
+            return pos;
+        }
+
+
         function moveOrMoveSel(direction, event) {
             if (direction !== -1 && direction !== 1) {
                 return console.exception("WTF direction?");
@@ -59,11 +90,13 @@ Rectangle {
             var cp = cursorPosition+direction;
             var tx = getText(0, length);
             if (tx.charCodeAt(cp) === 160) {
-                if (direction === -1) {
-                    cp = getLineStart(cp, tx);
-                } else if (direction === 1) {
-                    cp = getPosAfterTabs(cp, tx);
-                }
+//                if (direction === -1) {
+//                    cp = getLineStart(cp, tx);
+//                } else if (direction === 1) {
+//                    cp = getPosAfterTabs(cp, tx);
+//                }
+                cp = getSpaceEnd(tx, cp, direction);
+                cpSetDontAdjust = true
             }
 
             if (event.modifiers & Qt.ShiftModifier) {
@@ -133,9 +166,13 @@ Rectangle {
             event.accepted = true;
         }
 
+        function isControlShortcut(event, key) {
+            return event.key === key &&
+                    event.modifiers & Qt.ControlModifier && !(event.modifiers & Qt.ShiftModifier) && !(event.modifiers & Qt.AltModifier);
+        }
+
         Component.onCompleted: {
             forceActiveFocus();
-
             for(var i=0; i<tabWidth; i++) {
                 tabstr+=nbsp;
                 htmlTabstr+="&nbsp;";
@@ -154,7 +191,7 @@ Rectangle {
             var tx = getText(0, length);
             if (!inSelection()) {
                 if (event.key === Qt.Key_Backspace && tx.charCodeAt(cursorPosition-1) === 160) {
-                    remove(cursorPosition-tabWidth, cursorPosition);
+                    remove(getSpaceEnd(tx, cursorPosition-1, -1), cursorPosition);
                     event.accepted = true;
                     return;
                 }
@@ -167,7 +204,7 @@ Rectangle {
                         event.accepted = true;
                     } else {
                         if (tx.charCodeAt(cursorPosition+1) === 160) {
-                            remove(cursorPosition, cursorPosition+tabWidth);
+                            remove(cursorPosition, getSpaceEnd(tx, cursorPosition, 1));
                             event.accepted = true;
                         }
                     }
@@ -211,7 +248,7 @@ Rectangle {
                 return;
             }
 
-            if (event.key == Qt.Key_Backtab) {
+            if (event.key === Qt.Key_Backtab) {
                 handleTab(event, true);
                 return;
             }
@@ -220,7 +257,7 @@ Rectangle {
                 if (braceOpening && cursorPosition >= 1 && tx[cursorPosition-1] !== braceOpening) {
                     braceOpening = "";
                 }
-                //Opening brance handling
+                //Opening brace handling
                 for (var br in braces) {
                     if (event.key === braces[br][0]) {
                         braceOpening = br;
@@ -229,16 +266,33 @@ Rectangle {
 
                 //When a word ends, rehighlighting is triggered
                 if (!isAlphaNumericKey(event) || !isAlphaNumericKey(prevKey)) {
-                    doRehighlight();
+                    needRehighlight = true;
                 }
 
                 prevKey = event.key;
+                return;
+            }
+
+            if (isControlShortcut(event, Qt.Key_Z)) {
+                performUndo()
+                event.accepted = true;
+                return;
+            }
+
+            if (isControlShortcut(event, Qt.Key_Y)) {
+                performRedo()
+                event.accepted = true;
                 return;
             }
         }
 
 
         onCursorPositionChanged: {
+            if (cpSetDontAdjust) {
+                cpSetDontAdjust = false;
+                return;
+            }
+
             //Deal with faked tabs created with &nbsp;'s on click and selection
             var cp = cursorPosition;
             var tx = getText(0, length);
@@ -248,7 +302,7 @@ Rectangle {
                 if (linestart !== -1) {
                     cp = getPosAfterTabs(cp, tx);
                     if ((cp-linestart) % tabWidth !== 0) {
-                        console.exception("nbspaces "+(cp-linestart)+"don't match tabwidth?");
+                        console.warn("nbspaces "+(cp-linestart)+"don't match tabwidth?");
                     }
 
                     var tabPos = (cursorPosition - linestart) % tabWidth;

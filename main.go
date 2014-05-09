@@ -2,32 +2,168 @@ package main
 
 import (
 	"fmt"
-	"gopkg.in/qml.v0"
 	"io/ioutil"
 	"os"
+
+	qml "gopkg.in/qml.v0"
 )
+
+type command struct {
+	chstr string
+	pos   int
+	diff  int
+}
+
+func (c command) do(text []rune, diff int, pos int) string {
+	//fmt.Printf("%q %v %v\n", c.chstr, pos, c.diff)
+	if diff < 0 {
+		return string(text[0:pos+diff]) + string(text[pos:])
+	}
+	return string(text[0:pos]) + c.chstr + string(text[pos:])
+}
+
+func (c command) Redo(text []rune) string {
+	return c.do(text, c.diff, c.OldPos())
+}
+
+func (c command) Undo(text []rune) string {
+	return c.do(text, -c.diff, c.pos)
+}
+
+func (c command) OldPos() int {
+	return c.pos - c.diff
+}
+
+type UndoMgr struct {
+	undostack []command
+	redostack []command
+	editor    *Editor
+}
+
+func NewUndoMgr(editor *Editor) *UndoMgr {
+	return &UndoMgr{make([]command, 0), make([]command, 0), editor}
+}
+
+func (um *UndoMgr) Push(cmd command) {
+	um.undostack = append(um.undostack, cmd)
+}
+
+func (um *UndoMgr) do(text []rune, from *[]command, to *[]command, undo bool) (string, int) {
+	if len(*from) < 1 {
+		return string(text), -1
+	}
+	cmd := (*from)[len(*from)-1]
+	*from = (*from)[0 : len(*from)-1]
+	*to = append(*to, cmd)
+
+	if undo {
+		return cmd.Undo(text), cmd.OldPos()
+	}
+	return cmd.Redo(text), cmd.pos
+}
+
+func (um *UndoMgr) Undo(text []rune) (string, int) {
+	return um.do(text, &um.undostack, &um.redostack, true)
+}
+
+func (um *UndoMgr) Redo(text []rune) (string, int) {
+	return um.do(text, &um.redostack, &um.undostack, false)
+}
 
 type Editor struct {
 	qml.Object
-	tx   qml.Object //the TextArea element from qml
-	text []rune
+	tx            qml.Object //the TextArea element from qml
+	text          []rune
+	onRehighlight bool
+	um            *UndoMgr
 }
 
 func NewEditor(o qml.Object) *Editor {
-	return &Editor{
+	e := &Editor{
 		Object: o,
 		tx:     o.Call("textArea").(qml.Object),
+		um:     NewUndoMgr(nil),
 	}
+	e.um.editor = e
+	return e
+}
+
+func (e *Editor) SetText(text string) {
+	text = QmlHighlight(text)
+	e.onRehighlight = true
+	curPos := e.tx.Property("cursorPosition").(int)
+	e.tx.Set("text", text)
+	e.tx.Set("cursorPosition", curPos)
+	e.text = []rune(e.Text())
+}
+
+func (e *Editor) Text() string {
+	return e.tx.Call("getText", 0, e.tx.Property("length")).(string)
+}
+
+func (e *Editor) rehighlight() {
+	if e.onRehighlight {
+		return
+	}
+	//fmt.Printf("%q\n", e.Text())
+	e.SetText(e.Text())
 }
 
 func (e *Editor) Init() {
 	tx := e.tx
-	tx.On("rehighlight", func() {
-		text := tx.Call("getText", 0, tx.Property("length")).(string)
-		e.SetText(QmlHighlight(text))
-	})
+	e.text = []rune(e.Text())
+	tx.On("rehighlight", e.rehighlight)
 	tx.On("textChanged", func() {
-		e.text = []rune(tx.Call("getText", 0, tx.Property("length")).(string))
+		if e.onRehighlight {
+			e.onRehighlight = false
+			return
+		}
+		prevText := e.text
+		text := []rune(e.Text())
+		//println(";" + prevText + ";")
+		//println("." + text + ".")
+		lendiff := len(text) - len(prevText)
+		curPos := tx.Property("cursorPosition").(int)
+		if lendiff == 0 {
+			return
+		}
+		//fmt.Printf("%q\n", ";"+string(text[0:curPos-lendiff])+";")
+		//fmt.Printf("%q\n", "."+string(prevText[0:curPos-lendiff])+".")
+		spos := curPos
+		if lendiff > 0 {
+			spos = curPos - lendiff
+		}
+		//fmt.Printf("n: %v, %v -> %v, %v\n", lendiff, curPos, curPos-lendiff+1, spos)
+		if string(text[0:spos]) == string(prevText[0:spos]) {
+			change := make([]rune, 0)
+			if lendiff < 0 {
+				change = prevText[curPos : curPos-lendiff]
+			} else {
+				change = text[curPos-lendiff : curPos]
+			}
+			//fmt.Printf("%v\n", int(text[curPos-lendiff]))
+			e.um.Push(command{
+				chstr: string(change),
+				diff:  lendiff,
+				pos:   curPos,
+			})
+		}
+		e.text = text
+		if e.tx.Property("needRehighlight").(bool) {
+			e.tx.Set("needRehighlight", false)
+			e.rehighlight()
+		}
+	})
+	tx.On("performUndo", func() {
+		text, pos := e.um.Undo(e.text)
+		e.SetText(text)
+		e.tx.Set("cursorPosition", pos)
+
+	})
+	tx.On("performRedo", func() {
+		text, pos := e.um.Redo(e.text)
+		e.SetText(text)
+		e.tx.Set("cursorPosition", pos)
 	})
 	e.On("fileChanged", func() {
 		filePath := e.String("file")
@@ -38,12 +174,8 @@ func (e *Editor) Init() {
 		if err != nil {
 			panic(err.Error())
 		}
-		e.SetText(QmlHighlight(string(fcb[:])))
+		e.SetText(string(fcb[:]))
 	})
-}
-
-func (e *Editor) SetText(text string) {
-	e.tx.Set("text", text)
 }
 
 func main() {
