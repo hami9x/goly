@@ -1,4 +1,4 @@
 goly
 ====
 
-The lovely Go IDE
+The lovely IDE for Go, by Go.
