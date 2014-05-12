@@ -8,10 +8,15 @@ import (
 	qml "gopkg.in/qml.v0"
 )
 
+const (
+	TypingAction = 1
+)
+
 type command struct {
 	chstr string
 	pos   int
 	diff  int
+	kind  int
 }
 
 func (c command) do(text []rune, diff int, pos int) string {
@@ -37,37 +42,53 @@ func (c command) OldPos() int {
 type UndoMgr struct {
 	undostack []command
 	redostack []command
-	editor    *Editor
 }
 
-func NewUndoMgr(editor *Editor) *UndoMgr {
-	return &UndoMgr{make([]command, 0), make([]command, 0), editor}
+func NewUndoMgr() *UndoMgr {
+	return &UndoMgr{make([]command, 0), make([]command, 0)}
 }
 
 func (um *UndoMgr) Push(cmd command) {
 	um.undostack = append(um.undostack, cmd)
+	um.redostack = um.redostack[0:0]
 }
 
-func (um *UndoMgr) do(text []rune, from *[]command, to *[]command, undo bool) (string, int) {
+func (um *UndoMgr) do(text []rune, from *[]command, to *[]command, undo bool, pos int) (newText string, newPos int) {
 	if len(*from) < 1 {
-		return string(text), -1
+		return string(text), pos
 	}
 	cmd := (*from)[len(*from)-1]
-	*from = (*from)[0 : len(*from)-1]
-	*to = append(*to, cmd)
+	dpos := cmd.pos //the pos to verify if it's in the typing sequence
+	if !undo {
+		dpos = cmd.OldPos()
+	}
+	if pos != -1 && (cmd.kind != TypingAction || pos != dpos) {
+		return string(text), pos
+	}
+
+	*from = (*from)[0 : len(*from)-1] //pop from from
+	*to = append(*to, cmd)            //push to to
 
 	if undo {
-		return cmd.Undo(text), cmd.OldPos()
+		newText, newPos = cmd.Undo(text), cmd.OldPos()
+	} else {
+		newText, newPos = cmd.Redo(text), cmd.pos
 	}
-	return cmd.Redo(text), cmd.pos
+
+	if cmd.kind == TypingAction {
+		newText, newPos = um.do([]rune(newText), from, to, undo, newPos)
+		return
+	}
+
+	return
 }
 
 func (um *UndoMgr) Undo(text []rune) (string, int) {
-	return um.do(text, &um.undostack, &um.redostack, true)
+	return um.do(text, &um.undostack, &um.redostack, true, -1)
 }
 
 func (um *UndoMgr) Redo(text []rune) (string, int) {
-	return um.do(text, &um.redostack, &um.undostack, false)
+	return um.do(text, &um.redostack, &um.undostack, false, -1)
 }
 
 type Editor struct {
@@ -82,9 +103,8 @@ func NewEditor(o qml.Object) *Editor {
 	e := &Editor{
 		Object: o,
 		tx:     o.Call("textArea").(qml.Object),
-		um:     NewUndoMgr(nil),
+		um:     NewUndoMgr(),
 	}
-	e.um.editor = e
 	return e
 }
 
@@ -141,11 +161,16 @@ func (e *Editor) Init() {
 			} else {
 				change = text[curPos-lendiff : curPos]
 			}
+			kind := 0
+			if lendiff == 1 {
+				kind = TypingAction
+			}
 			//fmt.Printf("%v\n", int(text[curPos-lendiff]))
 			e.um.Push(command{
 				chstr: string(change),
 				diff:  lendiff,
 				pos:   curPos,
+				kind:  kind,
 			})
 		}
 		e.text = text
@@ -154,17 +179,20 @@ func (e *Editor) Init() {
 			e.rehighlight()
 		}
 	})
+
 	tx.On("performUndo", func() {
 		text, pos := e.um.Undo(e.text)
 		e.SetText(text)
 		e.tx.Set("cursorPosition", pos)
 
 	})
+
 	tx.On("performRedo", func() {
 		text, pos := e.um.Redo(e.text)
 		e.SetText(text)
 		e.tx.Set("cursorPosition", pos)
 	})
+
 	e.On("fileChanged", func() {
 		filePath := e.String("file")
 		if filePath[:7] == "file://" {

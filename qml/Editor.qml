@@ -300,7 +300,7 @@ Rectangle {
             if (tx.charCodeAt(cp) === 160) {
                 var linestart = getLineStart(cp, tx);
                 if (linestart !== -1) {
-                    cp = getPosAfterTabs(cp, tx);
+                    cp = getPosAfterTabs(linestart, tx);
                     if ((cp-linestart) % tabWidth !== 0) {
                         console.warn("nbspaces "+(cp-linestart)+"don't match tabwidth?");
                     }
